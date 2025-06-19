@@ -73,42 +73,42 @@ def add_metadata_to_mp3(file_path, track, album_data):
             print(f"Error adding cover art: {e}")
 
 
-def download_single_track(deezer_instance, folder_path, track, artist_name, album_title, release_year, album_data):
-    song_id = track["id"]
-    track_url = f"https://www.deezer.com/track/{song_id}" 
+def download_single_track(deezer_instance, folder_path, track, album_data):
+    try:
+        song_id = track["id"]
+        track_url = f"https://www.deezer.com/track/{song_id}" 
 
-    deezer_instance.download_trackdee(
-        link_track=track_url,
-        output_dir=folder_path,
-        quality_download='MP3_128',
-        recursive_quality=True,
-        recursive_download=False
-    )
+        deezer_instance.download_trackdee(
+            link_track=track_url,
+            output_dir=folder_path,
+            quality_download='MP3_128',
+            recursive_quality=True,
+            recursive_download=False
+        )
 
-    downloaded_files = []
+        # Buscar el archivo recién descargado
+        for root, _, files in os.walk(folder_path):
+            for file in files:
+                if file.endswith(".mp3"):
+                    file_path = os.path.join(root, file)
 
-    for root, _, files in os.walk(folder_path):
-        for file in files:
-            if file.endswith(".mp3"):
-                file_path = os.path.join(root, file)
+                    if os.path.getsize(file_path) == 0:
+                        os.remove(file_path)
+                        return None
 
-                if os.path.getsize(file_path) == 0:
-                    os.remove(file_path)
-                    continue
+                    idx = track.get("index", 1)
+                    new_file_name = f"{idx:02d}. {sanitize_filename(track['artist']['name'])} - {sanitize_filename(track['title'])}.mp3"
+                    new_file_path = os.path.join(folder_path, new_file_name)
+                    try:
+                        add_metadata_to_mp3(file_path, track, album_data)
+                    except Exception as e:
+                        print(f"Error adding metadata: {e}")
+                    os.rename(file_path, new_file_path)
+                    return new_file_name
 
-                try:
-                    add_metadata_to_mp3(file_path, track, album_data)
-                except Exception as e:
-                    print(f"Error adding metadata: {e}")
-
-                idx = track.get("index", 1)
-                new_file_name = f"{idx:02d}. {sanitize_filename(artist_name)} - {sanitize_filename(track['title'])}.mp3"
-                new_file_path = os.path.join(folder_path, new_file_name)
-                os.rename(file_path, new_file_path)
-                downloaded_files.append(new_file_name)
-                break
-
-    return downloaded_files
+    except Exception as e:
+        print(f"Error downloading track {track['id']}: {e}")
+        return None
 
 
 @download_album_bp.route('/', methods=['GET'])
@@ -119,7 +119,6 @@ def download_album():
         return jsonify({"error": "Se requiere un 'album_id' válido (número)"}), 400
 
     try:
-        # Obtener metadatos del álbum
         album_data = get_album_metadata(album_id)
 
         artist_name = album_data["artist"]["name"]
@@ -132,6 +131,7 @@ def download_album():
         session_folder = os.path.join(DOWNLOAD_DIR, session_id)
         folder_name = f"{safe_artist} - {safe_album} ({release_year})"
         folder_path = os.path.join(session_folder, folder_name)
+
         os.makedirs(folder_path, exist_ok=True)
 
         tracks = album_data.get("tracks", {}).get("data", [])
@@ -140,20 +140,23 @@ def download_album():
 
         downloaded_files = []
 
-        # Asignamos índice manualmente ya que eliminamos track_position
+        # Asignamos índice manualmente
         for idx, track in enumerate(tracks, start=1):
-            track["index"] = idx  # usamos este campo en lugar de track_position
+            track["index"] = idx
 
         with ThreadPoolExecutor(max_workers=5) as executor:
             futures = []
             for track in tracks:
-                track["index"] = idx  # usamos este campo en lugar de track_position
-                future = executor.submit(download_single_track, deezer, folder_path, track, artist_name, album_title, release_year, album_data)
+                future = executor.submit(download_single_track, deezer, folder_path, track, album_data)
                 futures.append(future)
 
             for future in futures:
                 result = future.result()
-                downloaded_files.extend(result)
+                if result:
+                    downloaded_files.append(result)
+
+        if not downloaded_files:
+            return jsonify({"error": "No se pudo descargar ninguna canción del álbum"}), 500
 
         # Crear ZIP en memoria
         memory_zip = BytesIO()
@@ -176,7 +179,6 @@ def download_album():
 
         zip_file_name = f"{safe_artist} - {safe_album} ({release_year}).zip"
 
-        # Devolver archivo ZIP desde memoria
         return send_file(
             memory_zip,
             mimetype='application/zip',
