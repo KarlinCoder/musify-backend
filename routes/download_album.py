@@ -2,7 +2,7 @@ import os
 import zipfile
 import requests
 from io import BytesIO
-from flask import Blueprint, jsonify, request, send_file
+from flask import Blueprint, jsonify, request
 from deezspot.deezloader import DeeLogin
 from mutagen.id3 import ID3, APIC
 from mutagen.easyid3 import EasyID3
@@ -112,7 +112,12 @@ def download_single_song(song_id, output_dir):
 
     add_metadata_to_mp3(downloaded_file, track_data, album_data)
 
+    counter = 1
     new_file_name = f"{safe_artist} - {safe_title}.mp3"
+    while os.path.exists(os.path.join(output_dir, new_file_name)):
+        new_file_name = f"{safe_artist} - {safe_title} ({counter}).mp3"
+        counter += 1
+
     new_file_path = os.path.join(output_dir, new_file_name)
     os.rename(downloaded_file, new_file_path)
 
@@ -179,8 +184,15 @@ def download_album():
         if upload_response.status_code != 200:
             return jsonify({"error": "No se pudo subir el archivo ZIP temporalmente"}), 500
 
-        upload_data = upload_response.json()
-        file_url = upload_data.get("url").replace("https://tmpfiles.org/",  "https://") 
+        try:
+            upload_data = upload_response.json()
+            file_url = upload_data.get("url")
+            if not file_url:
+                raise ValueError("La respuesta no contiene un URL válido")
+            file_url = file_url.replace("https://tmpfiles.org/",  "https://") 
+        except Exception as e:
+            print(f"Error procesando la respuesta de tmpfiles.org: {e}")
+            return jsonify({"error": "Hubo un problema procesando la carga del archivo ZIP"}), 500
 
         # Limpiar archivos temporales
         for file in mp3_files + [zip_filepath]:
@@ -192,4 +204,5 @@ def download_album():
         })
 
     except Exception as e:
+        print(f"Error en el proceso de descarga del álbum: {e}")
         return jsonify({"error": str(e)}), 500
