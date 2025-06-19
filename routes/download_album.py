@@ -107,11 +107,9 @@ def upload_to_tmpfiles(zip_data, filename):
             logger.error(f"Respuesta inesperada de tmpfiles.org: {json_response}")
             raise Exception("La estructura de la respuesta no es la esperada")
         
-        # Transformar la URL para descarga directa
-        download_url = json_response['data']['url'].replace(
-            "https://tmpfiles.org/", 
-            "https://tmpfiles.org/dl/"
-        )
+        # Obtener la URL base y transformarla a URL de descarga directa
+        base_url = json_response['data']['url']
+        download_url = base_url.replace("https://tmpfiles.org/", "https://tmpfiles.org/dl/")
         
         logger.info(f"Subida exitosa a tmpfiles.org. URL: {download_url}")
         return {
