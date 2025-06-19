@@ -9,6 +9,8 @@ from flask import Blueprint, jsonify, request
 from deezspot.deezloader import DeeLogin
 from mutagen.id3 import ID3, TIT2, TPE1, TALB, TYER, APIC
 from mutagen.easyid3 import EasyID3
+import shutil
+import time
 
 DOWNLOAD_DIR = './downloads'
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
@@ -86,28 +88,41 @@ def download_single_track(deezer_instance, folder_path, track, album_data):
             recursive_download=False
         )
 
+        downloaded_file = None
         # Buscar el archivo recién descargado
         for root, _, files in os.walk(folder_path):
             for file in files:
                 if file.endswith(".mp3"):
-                    file_path = os.path.join(root, file)
+                    downloaded_file = os.path.join(root, file)
+                    break
+            if downloaded_file:
+                break
 
-                    if os.path.getsize(file_path) == 0:
-                        os.remove(file_path)
-                        return None
+        if not downloaded_file or not os.path.exists(downloaded_file):
+            print(f"Archivo no encontrado después de descargar: {track['title']}")
+            return None
 
-                    idx = track.get("index", 1)
-                    new_file_name = f"{idx:02d}. {sanitize_filename(track['artist']['name'])} - {sanitize_filename(track['title'])}.mp3"
-                    new_file_path = os.path.join(folder_path, new_file_name)
-                    try:
-                        add_metadata_to_mp3(file_path, track, album_data)
-                    except Exception as e:
-                        print(f"Error adding metadata: {e}")
-                    os.rename(file_path, new_file_path)
-                    return new_file_name
+        if os.path.getsize(downloaded_file) == 0:
+            os.remove(downloaded_file)
+            return None
+
+        idx = track.get("index", 1)
+        new_file_name = f"{idx:02d}. {sanitize_filename(track['artist']['name'])} - {sanitize_filename(track['title'])}.mp3"
+        new_file_path = os.path.normpath(os.path.join(folder_path, new_file_name))
+
+        time.sleep(0.2)  # Pequeña pausa para evitar bloqueo de escritura
+
+        try:
+            add_metadata_to_mp3(downloaded_file, track, album_data)
+        except Exception as e:
+            print(f"Error adding metadata to {track['title']}: {e}")
+
+        # Usamos shutil por mayor compatibilidad
+        shutil.move(downloaded_file, new_file_path)
+        return os.path.basename(new_file_path)
 
     except Exception as e:
-        print(f"Error downloading track {track['id']}: {e}")
+        print(f"Error downloading track {track.get('id', 'unknown')}: {e}")
         return None
 
 
@@ -116,7 +131,9 @@ def download_album():
     album_id = request.args.get('album_id')
 
     if not album_id or not album_id.isdigit():
-        return jsonify({"error": "Se requiere un 'album_id' válido (número)"}), 400
+        return jsonify({
+            "download_url": ""
+        }), 400
 
     try:
         album_data = get_album_metadata(album_id)
@@ -136,7 +153,9 @@ def download_album():
 
         tracks = album_data.get("tracks", {}).get("data", [])
         if not tracks:
-            return jsonify({"error": "Este álbum no tiene canciones disponibles"}), 400
+            return jsonify({
+                "download_url": ""
+            }), 400
 
         downloaded_files = []
 
@@ -156,7 +175,9 @@ def download_album():
                     downloaded_files.append(result)
 
         if not downloaded_files:
-            return jsonify({"error": "No se pudo descargar ninguna canción del álbum"}), 500
+            return jsonify({
+                "download_url": ""
+            }), 500
 
         # Crear ZIP en memoria
         zip_buffer = BytesIO()
@@ -183,24 +204,30 @@ def download_album():
 
         if response.status_code != 200:
             return jsonify({
-                "error": "Fallo al subir el archivo a tmpfiles.org",
-                "response": response.text
+                "download_url": ""
             }), 500
 
         response_json = response.json()
         file_url = response_json.get("url", "").replace("https://tmpfiles.org/",  "http://tmpfiles.org/dl/")
 
-        # Limpiar carpeta temporal
-        for root, dirs, files in os.walk(session_folder, topdown=False):
-            for name in files:
-                os.remove(os.path.join(root, name))
-            for name in dirs:
-                os.rmdir(os.path.join(root, name))
-        os.rmdir(session_folder)
-
-        return jsonify({
-            "download_url": file_url
-        })
-
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        print(f"Error general: {e}")
+        return jsonify({
+            "download_url": ""
+        }), 500
+
+    finally:
+        # Limpiar carpeta temporal SIEMPRE
+        try:
+            for root, dirs, files in os.walk(session_folder, topdown=False):
+                for name in files:
+                    os.remove(os.path.join(root, name))
+                for name in dirs:
+                    os.rmdir(os.path.join(root, name))
+            os.rmdir(session_folder)
+        except Exception as cleanup_error:
+            print(f"Error limpiando carpetas temporales: {cleanup_error}")
+
+    return jsonify({
+        "download_url": file_url
+    })
