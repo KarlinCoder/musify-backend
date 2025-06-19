@@ -93,20 +93,30 @@ def upload_to_tmpfiles(zip_data, filename):
         if len(zip_data) == 0:
             raise Exception("El archivo ZIP está vacío")
         
-        files = {'file': (filename, zip_data, 'application/zip')}
+        # Crear un objeto BytesIO para el archivo en memoria
+        file_obj = BytesIO(zip_data)
+        files = {'file': (filename, file_obj, 'application/zip')}
         
         response = requests.post(TMPFILES_API, files=files)
         response.raise_for_status()
         
         json_response = response.json()
         
-        if not json_response.get('url'):
-            raise Exception("La API no devolvió una URL de descarga válida")
+        # Verificar la estructura de la respuesta
+        if not json_response.get('data') or not json_response['data'].get('url'):
+            logger.error(f"Respuesta inesperada de tmpfiles.org: {json_response}")
+            raise Exception("La estructura de la respuesta no es la esperada")
         
-        logger.info("Subida exitosa a tmpfiles.org")
+        # Transformar la URL para descarga directa
+        download_url = json_response['data']['url'].replace(
+            "https://tmpfiles.org/", 
+            "https://tmpfiles.org/dl/"
+        )
+        
+        logger.info(f"Subida exitosa a tmpfiles.org. URL: {download_url}")
         return {
-            'download_url': json_response['url'],
-            'delete_url': json_response.get('delete_url', '')
+            'download_url': download_url,
+            'delete_url': json_response['data'].get('delete_url', '')
         }
     except Exception as e:
         logger.error(f"Error subiendo a tmpfiles.org: {str(e)}")
