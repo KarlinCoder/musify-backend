@@ -163,7 +163,7 @@ def download_album():
         for idx, track in enumerate(tracks, start=1):
             track["index"] = idx
 
-        with ThreadPoolExecutor(max_workers=5) as executor:
+        with ThreadPoolExecutor(max_workers=2) as executor:
             futures = []
             for track in tracks:
                 future = executor.submit(download_single_track, deezer, folder_path, track, album_data)
@@ -179,7 +179,7 @@ def download_album():
                 "download_url": ""
             }), 500
 
-        # Crear ZIP en memoria
+        # Crear ZIP directamente en disco
         zip_buffer = BytesIO()
         with zipfile.ZipFile(zip_buffer, 'w') as zipf:
             for root, _, files in os.walk(folder_path):
@@ -200,7 +200,7 @@ def download_album():
             files = {"file": ("album.zip", f)}
             response = requests.post(TMPFILES_UPLOAD_URL, files=files)
 
-        os.remove(tmp_zip_path)  # Limpiar el archivo temporal local
+        os.remove(tmp_zip_path)
 
         if response.status_code != 200:
             return jsonify({
