@@ -14,7 +14,7 @@ os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 DEEZER_API_SONG = "https://api.deezer.com/track/" 
 
 # Inicialización del cliente Deezer
-deezer = DeeLogin(arl='10fa24c551e734b466e54a4415ca0a00712efaf47064f7fee8acd843f6e4bb2e94d82ac842988fc81072af4a65ad781ba419c11c3175b17339b1d5e0f90ae80a603292b3648c68992df6f2eecfcfc9dd2bc8bb965f1a6f8e7be4ea62480fa500')
+deezer = DeeLogin(arl='87f304e8bff197c8877dac3ca0a21d0ef6505af952ee392f856c30527508e177c9d0f90af069e248fee50cbe9b200e3962537f4eff8c8ef2d7d564b30c74e06d6c8779c3c0ed002e92792d403ab7522c5c8102ca4dadb319a02e4c8c5729e739')
 
 download_song_bp = Blueprint('download-song', __name__)
 
