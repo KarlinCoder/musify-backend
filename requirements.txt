@@ -1,0 +1,8 @@
+Flask>=3.0.0
+Flask-CORS>=3.0.0
+ytmusicapi>=1.0.0
+mutagen>=1.46.0
+gunicorn>=20.1.0
+yt-dlp>=2024.7.5
+requests>=2.32.0
+deezspot>=0.1.2
