@@ -1,12 +1,11 @@
-# routes/download_album.py
-
 import os
 import uuid
 import requests
 import zipfile
 from io import BytesIO
 from concurrent.futures import ThreadPoolExecutor
-from flask import Blueprint, jsonify, request, send_file
+from tempfile import NamedTemporaryFile
+from flask import Blueprint, jsonify, request
 from deezspot.deezloader import DeeLogin
 from mutagen.id3 import ID3, TIT2, TPE1, TALB, TYER, APIC
 from mutagen.easyid3 import EasyID3
@@ -14,7 +13,8 @@ from mutagen.easyid3 import EasyID3
 DOWNLOAD_DIR = './downloads'
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
-DEEZER_API_ALBUM = "https://api.deezer.com/album/" 
+DEEZER_API_ALBUM = "https://api.deezer.com/album/"    
+TMPFILES_UPLOAD_URL = "https://tmpfiles.org/api/v1/upload" 
 
 deezer = DeeLogin(arl='87f304e8bff197c8877dac3ca0a21d0ef6505af952ee392f856c30527508e177c9d0f90af069e248fee50cbe9b200e3962537f4eff8c8ef2d7d564b30c74e06d6c8779c3c0ed002e92792d403ab7522c5c8102ca4dadb319a02e4c8c5729e739')
 
@@ -76,7 +76,7 @@ def add_metadata_to_mp3(file_path, track, album_data):
 def download_single_track(deezer_instance, folder_path, track, album_data):
     try:
         song_id = track["id"]
-        track_url = f"https://www.deezer.com/track/{song_id}" 
+        track_url = f"https://www.deezer.com/track/{song_id}"    
 
         deezer_instance.download_trackdee(
             link_track=track_url,
@@ -159,15 +159,36 @@ def download_album():
             return jsonify({"error": "No se pudo descargar ninguna canción del álbum"}), 500
 
         # Crear ZIP en memoria
-        memory_zip = BytesIO()
-        with zipfile.ZipFile(memory_zip, 'w') as zipf:
+        zip_buffer = BytesIO()
+        with zipfile.ZipFile(zip_buffer, 'w') as zipf:
             for root, _, files in os.walk(folder_path):
                 for file in files:
                     file_path = os.path.join(root, file)
                     arcname = os.path.relpath(file_path, folder_path)
                     zipf.write(file_path, arcname)
 
-        memory_zip.seek(0)
+        zip_buffer.seek(0)
+
+        # Guardar el ZIP en un archivo temporal
+        with NamedTemporaryFile(delete=False, suffix=".zip") as tmp_zip:
+            tmp_zip.write(zip_buffer.getvalue())
+            tmp_zip_path = tmp_zip.name
+
+        # Subir a tmpfiles.org
+        with open(tmp_zip_path, "rb") as f:
+            files = {"file": ("album.zip", f)}
+            response = requests.post(TMPFILES_UPLOAD_URL, files=files)
+
+        os.remove(tmp_zip_path)  # Limpiar el archivo temporal local
+
+        if response.status_code != 200:
+            return jsonify({
+                "error": "Fallo al subir el archivo a tmpfiles.org",
+                "response": response.text
+            }), 500
+
+        response_json = response.json()
+        file_url = response_json.get("url", "").replace("https://tmpfiles.org/",  "http://tmpfiles.org/dl/")
 
         # Limpiar carpeta temporal
         for root, dirs, files in os.walk(session_folder, topdown=False):
@@ -177,14 +198,9 @@ def download_album():
                 os.rmdir(os.path.join(root, name))
         os.rmdir(session_folder)
 
-        zip_file_name = f"{safe_artist} - {safe_album} ({release_year}).zip"
-
-        return send_file(
-            memory_zip,
-            mimetype='application/zip',
-            as_attachment=True,
-            download_name=zip_file_name
-        )
+        return jsonify({
+            "download_url": file_url
+        })
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
