@@ -73,7 +73,7 @@ def add_metadata_to_mp3(file_path, track, album_data):
             print(f"Error adding cover art: {e}")
 
 
-def download_single_track(deezer_instance, folder_path, track, artist_name, album_title, release_year):
+def download_single_track(deezer_instance, folder_path, track, artist_name, album_title, release_year, album_data):
     song_id = track["id"]
     track_url = f"https://www.deezer.com/track/{song_id}" 
 
@@ -147,7 +147,8 @@ def download_album():
         with ThreadPoolExecutor(max_workers=5) as executor:
             futures = []
             for track in tracks:
-                future = executor.submit(download_single_track, deezer, folder_path, track, artist_name, album_title, release_year)
+                track["index"] = idx  # usamos este campo en lugar de track_position
+                future = executor.submit(download_single_track, deezer, folder_path, track, artist_name, album_title, release_year, album_data)
                 futures.append(future)
 
             for future in futures:
