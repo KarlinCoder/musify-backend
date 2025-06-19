@@ -33,15 +33,18 @@ def add_metadata_to_mp3(file_path, track_data, album_data):
     contributors = track_data.get("contributors", [])
     artists = [artist["name"] for artist in contributors]
     if not artists:
-        artists = [track_data["artist"]["name"]]
+        artists = [track_data.get("artist", {}).get("name", "Unknown Artist")]
     artist_str = ", ".join(artists)
 
+    # Obtener número de pista - primero intentamos con track_position, luego TRACK_NUMBER
+    track_number = str(track_data.get("track_position")) or str(track_data.get("TRACK_NUMBER", "0"))
+
     # Metadatos
-    audio["title"] = track_data["title"]
+    audio["title"] = track_data.get("title", "Unknown Title")
     audio["artist"] = artist_str
-    audio["album"] = album_data["title"]
-    audio["tracknumber"] = str(track_data["track_position"])
-    audio["date"] = album_data["release_date"].split("-")[0]
+    audio["album"] = album_data.get("title", "Unknown Album")
+    audio["tracknumber"] = track_number
+    audio["date"] = album_data.get("release_date", "").split("-")[0] if album_data.get("release_date") else ""
 
     try:
         audio.save(file_path)
