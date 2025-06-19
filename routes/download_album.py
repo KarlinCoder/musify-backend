@@ -1,23 +1,95 @@
+# routes/download_album.py
+
 import os
+import uuid
 import requests
 import zipfile
-from flask import Blueprint, jsonify, request
+from io import BytesIO
+from flask import Blueprint, jsonify, request, send_file, send_from_directory
 from deezspot.deezloader import DeeLogin
+from mutagen.id3 import ID3, TIT2, TPE1, TALB, TRCK, TYER, APIC
+from mutagen.easyid3 import EasyID3
 
-# Directorio temporal para descargas
 DOWNLOAD_DIR = './downloads'
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
-# API base de Deezer
 DEEZER_API_ALBUM = "https://api.deezer.com/album/"
+TEMPFILES_API = "https://tempfiles.ninja/api/upload"
 
-# Inicialización del cliente Deezer
-deezer = DeeLogin(arl='87f304e8bff197c8877dac3ca0a21d0ef6505af952ee392f856c30527508e177c9d0f90af069e248fee50cbe9b200e3962537f4eff8c8ef2d7d564b30c74e06d6c8779c3c0ed002e92792d403ab7522c5c8102ca4dadb319a02e4c8c5729e739')
+deezer = DeeLogin(arl='ce07a9bdbb677f70fec97b4682998f513ac3dcacd9fc843f2e0ef71efd90667b314ce91cbcccd86f331d945606b29b26222b1828d4c81a054dce4d2516176efdce68a8139dbeb5e34bb379ba62eed5811904008b1279f3156dc0c4f60ecbd61d')
 
 download_album_bp = Blueprint('download-album', __name__)
 
+
 def sanitize_filename(name):
     return "".join(c for c in name if c.isalnum() or c in (" ", "-", "_")).strip()
+
+
+def get_album_metadata(album_id):
+    print(f"Obteniendo metadatos del álbum {album_id}...")
+    response = requests.get(f"{DEEZER_API_ALBUM}{album_id}")
+    if response.status_code != 200:
+        raise Exception("Error al obtener metadatos del álbum desde Deezer")
+    return response.json()
+
+
+def add_metadata_to_mp3(file_path, track, album_data):
+    try:
+        audio = EasyID3(file_path)
+    except:
+        audio = EasyID3()
+
+    contributors = track.get("contributors", [])
+    artists = [artist["name"] for artist in contributors]
+    if not artists:
+        artists = [track["artist"]["name"]]
+    artist_str = ", ".join(artists)
+
+    audio["title"] = track["title"]
+    audio["artist"] = artist_str
+    audio["album"] = album_data["title"]
+    audio["tracknumber"] = str(track["track_position"])
+    audio["date"] = album_data["release_date"].split("-")[0]
+
+    try:
+        audio.save(file_path)
+    except Exception as e:
+        print(f"Error guardando metadatos en {file_path}: {e}")
+
+    id3 = ID3(file_path)
+    cover_url = album_data.get("cover_xl") or album_data.get("cover_big")
+    if cover_url:
+        try:
+            print(f"Descargando portada para {track['title']}...")
+            cover_data = requests.get(cover_url).content
+            id3.add(
+                APIC(
+                    encoding=3,
+                    mime="image/jpeg",
+                    type=3,
+                    desc="Cover",
+                    data=cover_data
+                )
+            )
+            id3.save(v2_version=3)
+        except Exception as e:
+            print(f"Error añadiendo portada: {e}")
+
+
+def upload_to_tempfiles(zip_data, filename):
+    print(f"Subiendo archivo {filename} a tempfiles.ninja...")
+    headers = {
+        'Content-Type': 'application/zip',
+        'filename': filename
+    }
+    
+    response = requests.post(TEMPFILES_API, headers=headers, data=zip_data)
+    
+    if response.status_code != 201:
+        raise Exception(f"Error al subir a tempfiles.ninja: {response.text}")
+    
+    return response.json()
+
 
 @download_album_bp.route('/', methods=['GET'])
 def download_album():
@@ -27,81 +99,93 @@ def download_album():
         return jsonify({"error": "Se requiere un 'album_id' válido (número)"}), 400
 
     try:
-        # Obtener datos del álbum desde Deezer
-        response = requests.get(f"{DEEZER_API_ALBUM}{album_id}")
-        if response.status_code != 200:
-            return jsonify({"error": "No se pudo obtener información del álbum"}), 404
+        # Obtener metadatos del álbum
+        album_data = get_album_metadata(album_id)
+        print(f"Procesando álbum: {album_data['title']} de {album_data['artist']['name']}")
 
-        album_data = response.json()
-        artist_name = album_data.get("artist", {}).get("name", "Unknown Artist")
-        album_title = album_data.get("title", "Unknown Album")
-        release_year = album_data.get("release_date", "").split("-")[0]
+        artist_name = album_data["artist"]["name"]
+        album_title = album_data["title"]
+        release_year = album_data["release_date"].split("-")[0]
 
-        # Crear nombre seguro para el archivo ZIP
         safe_artist = sanitize_filename(artist_name)
         safe_album = sanitize_filename(album_title)
-        zip_name = f"{safe_artist} - {safe_album} ({release_year}).zip"
-        zip_path = os.path.join(DOWNLOAD_DIR, zip_name)
+        folder_name = f"{safe_artist} - {safe_album} ({release_year})"
+        folder_path = os.path.join(DOWNLOAD_DIR, folder_name)
+        os.makedirs(folder_path, exist_ok=True)
 
-        # Crear directorio temporal para el álbum
-        album_dir = os.path.join(DOWNLOAD_DIR, f"album_{album_id}")
-        os.makedirs(album_dir, exist_ok=True)
-
-        # Descargar cada canción del álbum
         tracks = album_data.get("tracks", {}).get("data", [])
         if not tracks:
-            return jsonify({"error": "No se encontraron canciones en el álbum"}), 404
+            return jsonify({"error": "Este álbum no tiene canciones disponibles"}), 400
 
-        for track in tracks:
-            track_id = track.get("id")
-            if not track_id:
-                continue
+        downloaded_files = []
 
-            track_url = f"https://www.deezer.com/track/{track_id}"
+        for idx, track in enumerate(tracks, start=1):
+            song_id = track["id"]
+            track_url = f"https://www.deezer.com/track/{song_id}"
+            print(f"Descargando canción {idx}/{len(tracks)}: {track['title']}")
+
             deezer.download_trackdee(
                 link_track=track_url,
-                output_dir=album_dir,
+                output_dir=folder_path,
                 quality_download='MP3_128',
                 recursive_quality=True,
                 recursive_download=False
             )
 
-        # Comprimir todas las canciones en un ZIP
-        with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-            for root, _, files in os.walk(album_dir):
+            for root, _, files in os.walk(folder_path):
                 for file in files:
-                    if file.endswith('.mp3'):
+                    if file.endswith(".mp3") and file not in downloaded_files:
                         file_path = os.path.join(root, file)
-                        zipf.write(file_path, os.path.basename(file_path))
 
-        # Subir el ZIP a tmpfiles.org
-        with open(zip_path, 'rb') as f:
-            response = requests.post(
-                "https://tmpfiles.org/api/v1/upload",
-                files={"file": (zip_name, f)}
-            )
+                        if os.path.getsize(file_path) == 0:
+                            os.remove(file_path)
+                            continue
 
-        if response.status_code != 200:
-            return jsonify({"error": "Error al subir el archivo a tmpfiles.org"}), 500
+                        try:
+                            add_metadata_to_mp3(file_path, track, album_data)
+                        except Exception as e:
+                            print(f"Error añadiendo metadatos: {e}")
 
-        # Obtener URL de descarga (asumiendo que tmpfiles.org devuelve JSON con la URL)
-        upload_data = response.json()
-        download_url = upload_data.get("url")  # Ajustar según la respuesta real de tmpfiles.org
+                        new_file_name = f"{idx:02d}. {sanitize_filename(artist_name)} - {sanitize_filename(track['title'])}.mp3"
+                        new_file_path = os.path.join(folder_path, new_file_name)
+                        os.rename(file_path, new_file_path)
+                        downloaded_files.append(new_file_name)
+                        break
 
-        # Limpiar archivos temporales
-        for root, dirs, files in os.walk(album_dir, topdown=False):
+        # Crear ZIP en memoria
+        memory_zip = BytesIO()
+        with zipfile.ZipFile(memory_zip, 'w', zipfile.ZIP_DEFLATED) as zipf:
+            for root, _, files in os.walk(folder_path):
+                for file in files:
+                    file_path = os.path.join(root, file)
+                    arcname = os.path.relpath(file_path, folder_path)
+                    zipf.write(file_path, arcname)
+
+        memory_zip.seek(0)
+        zip_data = memory_zip.getvalue()
+        zip_file_name = f"{safe_artist} - {safe_album} ({release_year}).zip"
+
+        # Limpiar carpeta temporal
+        for root, dirs, files in os.walk(folder_path, topdown=False):
             for name in files:
                 os.remove(os.path.join(root, name))
             for name in dirs:
                 os.rmdir(os.path.join(root, name))
-        os.rmdir(album_dir)
-        if os.path.exists(zip_path):
-            os.remove(zip_path)
+        os.rmdir(folder_path)
+
+        # Subir a tempfiles.ninja
+        upload_response = upload_to_tempfiles(zip_data, zip_file_name)
+        print(f"Archivo subido exitosamente: {upload_response['download_url']}")
 
         return jsonify({
-            "message": "Álbum descargado y comprimido con éxito",
-            "download_url": download_url
+            "status": "success",
+            "download_url": upload_response['download_url'],
+            "filename": zip_file_name,
+            "album": album_title,
+            "artist": artist_name,
+            "year": release_year
         })
 
     except Exception as e:
+        print(f"Error en el proceso: {str(e)}")
         return jsonify({"error": str(e)}), 500
