@@ -18,9 +18,9 @@ DOWNLOAD_DIR = './downloads'
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
 DEEZER_API_ALBUM = "https://api.deezer.com/album/"
-TEMPFILES_API = "https://tempfiles.ninja/api/upload"
+TMPFILES_API = "https://tmpfiles.org/api/v1/upload"
 
-deezer = DeeLogin(arl='87f304e8bff197c8877dac3ca0a21d0ef6505af952ee392f856c30527508e177c9d0f90af069e248fee50cbe9b200e3962537f4eff8c8ef2d7d564b30c74e06d6c8779c3c0ed002e92792d403ab7522c5c8102ca4dadb319a02e4c8c5729e739')
+deezer = DeeLogin(arl='ce07a9bdbb677f70fec97b4682998f513ac3dcacd9fc843f2e0ef71efd90667b314ce91cbcccd86f331d945606b29b26222b1828d4c81a054dce4d2516176efdce68a8139dbeb5e34bb379ba62eed5811904008b1279f3156dc0c4f60ecbd61d')
 
 download_album_bp = Blueprint('download-album', __name__)
 
@@ -86,25 +86,30 @@ def add_metadata_to_mp3(file_path, track, album_data):
         logger.error(f"Error en add_metadata_to_mp3: {str(e)}")
         raise
 
-def upload_to_tempfiles(zip_data, filename):
+def upload_to_tmpfiles(zip_data, filename):
     try:
-        logger.info(f"Subiendo {filename} ({len(zip_data)} bytes) a tempfiles.ninja")
+        logger.info(f"Subiendo {filename} ({len(zip_data)} bytes) a tmpfiles.org")
         
         if len(zip_data) == 0:
             raise Exception("El archivo ZIP está vacío")
         
-        headers = {
-            'Content-Type': 'application/zip',
-            'filename': filename
-        }
+        files = {'file': (filename, zip_data, 'application/zip')}
         
-        response = requests.post(TEMPFILES_API, headers=headers, data=zip_data)
+        response = requests.post(TMPFILES_API, files=files)
         response.raise_for_status()
         
-        logger.info("Subida exitosa a tempfiles.ninja")
-        return response.json()
+        json_response = response.json()
+        
+        if not json_response.get('url'):
+            raise Exception("La API no devolvió una URL de descarga válida")
+        
+        logger.info("Subida exitosa a tmpfiles.org")
+        return {
+            'download_url': json_response['url'],
+            'delete_url': json_response.get('delete_url', '')
+        }
     except Exception as e:
-        logger.error(f"Error subiendo a tempfiles.ninja: {str(e)}")
+        logger.error(f"Error subiendo a tmpfiles.org: {str(e)}")
         raise
 
 def create_zip_file(folder_path):
@@ -224,9 +229,9 @@ def download_album():
         logger.info(f"Creando archivo ZIP: {zip_file_name}")
         zip_data = create_zip_file(folder_path)
 
-        # 4. Subir a tempfiles.ninja
-        logger.info("Subiendo a tempfiles.ninja...")
-        upload_response = upload_to_tempfiles(zip_data, zip_file_name)
+        # 4. Subir a tmpfiles.org
+        logger.info("Subiendo a tmpfiles.org...")
+        upload_response = upload_to_tmpfiles(zip_data, zip_file_name)
         
         # 5. Limpiar
         cleanup_folder(folder_path)
@@ -235,7 +240,8 @@ def download_album():
         logger.info("Proceso completado exitosamente")
         return jsonify({
             "status": "success",
-            "download_url": upload_response.get('download_url'),
+            "download_url": upload_response['download_url'],
+            "delete_url": upload_response.get('delete_url', ''),
             "filename": zip_file_name,
             "album": album_title,
             "artist": artist_name,
