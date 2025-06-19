@@ -2,29 +2,27 @@ import os
 import uuid
 import requests
 import zipfile
-from io import BytesIO
 from concurrent.futures import ThreadPoolExecutor
-from tempfile import NamedTemporaryFile
 from flask import Blueprint, jsonify, request
 from deezspot.deezloader import DeeLogin
 from mutagen.easyid3 import EasyID3
 from mutagen.id3 import ID3, APIC
 import shutil
-import time
 
-DOWNLOAD_DIR = './downloads'
-os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+download_album_bp = Blueprint('download-album', __name__)
 
 DEEZER_API_ALBUM = "https://api.deezer.com/album/" 
 TMPFILES_UPLOAD_URL = "https://tmpfiles.org/api/v1/upload" 
 
+# Iniciar sesión en Deezer
 deezer = DeeLogin(arl='87f304e8bff197c8877dac3ca0a21d0ef6505af952ee392f856c30527508e177c9d0f90af069e248fee50cbe9b200e3962537f4eff8c8ef2d7d564b30c74e06d6c8779c3c0ed002e92792d403ab7522c5c8102ca4dadb319a02e4c8c5729e739')
 
-download_album_bp = Blueprint('download-album', __name__)
+DOWNLOAD_DIR = './downloads'
+os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
 
 def sanitize_filename(name):
-    return "".join(c for c in name if c.isalnum() or c in (" ", "-", "_")).strip()
+    return "".join(c for c in name if c.isalnum() or c in (" ", "-", "_")).rstrip()
 
 
 def get_album_metadata(album_id):
@@ -146,7 +144,7 @@ def download_album():
         if not tracks:
             return jsonify({"download_url": ""}), 400
 
-        # Asignamos índice manualmente
+        # Asignar índice manual
         for idx, track in enumerate(tracks, start=1):
             track["index"] = idx
 
@@ -166,13 +164,13 @@ def download_album():
         if not downloaded_files:
             return jsonify({"download_url": ""}), 500
 
-        # Crear ZIP directamente en disco
+        # Crear ZIP
         zip_path = os.path.join(DOWNLOAD_DIR, f"{session_id}_album")
         shutil.make_archive(zip_path, 'zip', folder_path)
 
         zip_file_path = zip_path + ".zip"
 
-        # Subir a tmpfiles.org
+        # Subir al servidor temporal
         with open(zip_file_path, "rb") as f:
             files = {"file": ("album.zip", f)}
             response = requests.post(TMPFILES_UPLOAD_URL, files=files)
@@ -190,11 +188,10 @@ def download_album():
         return jsonify({"download_url": ""}), 500
 
     finally:
-        # Limpiar carpeta temporal SIEMPRE
         try:
             shutil.rmtree(session_folder)
-        except Exception as cleanup_error:
-            print(f"Error limpiando carpetas temporales: {cleanup_error}")
+        except Exception as e:
+            print(f"Error borrando carpetas temporales: {e}")
 
     return jsonify({
         "download_url": file_url
