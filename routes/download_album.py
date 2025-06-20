@@ -86,38 +86,79 @@ def add_metadata_to_mp3(file_path, track, album_data, track_number):
         logger.error(f"Error en add_metadata_to_mp3: {str(e)}")
         raise
 
-def upload_to_tmpfiles(zip_data, filename):
+# def upload_to_tmpfiles(zip_data, filename):
+#     try:
+#         logger.info(f"Subiendo {filename} ({len(zip_data)} bytes) a tmpfiles.org")
+        
+#         if len(zip_data) == 0:
+#             raise Exception("El archivo ZIP está vacío")
+        
+#         # Crear un objeto BytesIO para el archivo en memoria
+#         file_obj = BytesIO(zip_data)
+#         files = {'file': (filename, file_obj, 'application/zip')}
+        
+#         response = requests.post(TMPFILES_API, files=files)
+#         response.raise_for_status()
+        
+#         json_response = response.json()
+        
+#         # Verificar la estructura de la respuesta
+#         if not json_response.get('data') or not json_response['data'].get('url'):
+#             logger.error(f"Respuesta inesperada de tmpfiles.org: {json_response}")
+#             raise Exception("La estructura de la respuesta no es la esperada")
+        
+#         # Obtener la URL base y transformarla a URL de descarga directa
+#         base_url = json_response['data']['url']
+#         download_url = base_url.replace("https://tmpfiles.org/", "https://tmpfiles.org/dl/")
+        
+#         logger.info(f"Subida exitosa a tmpfiles.org. URL: {download_url}")
+#         return {
+#             'download_url': download_url,
+#             'delete_url': json_response['data'].get('delete_url', '')
+#         }
+#     except Exception as e:
+#         logger.error(f"Error subiendo a tmpfiles.org: {str(e)}")
+#         raise
+
+def upload_to_quax(zip_data, filename):
     try:
-        logger.info(f"Subiendo {filename} ({len(zip_data)} bytes) a tmpfiles.org")
+        logger.info(f"Subiendo {filename} ({len(zip_data)} bytes) a qu.ax")
         
         if len(zip_data) == 0:
             raise Exception("El archivo ZIP está vacío")
         
         # Crear un objeto BytesIO para el archivo en memoria
         file_obj = BytesIO(zip_data)
-        files = {'file': (filename, file_obj, 'application/zip')}
+        files = {'files[]': (filename, file_obj, 'application/zip')}
         
-        response = requests.post(TMPFILES_API, files=files)
+        response = requests.post(
+            "https://qu.ax/upload.php",
+            files=files,
+            data={'expiry': '30'},
+            headers={
+                "User-Agent": "Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Mobile Safari/537.36",
+                "Referer": "https://qu.ax/"
+            }
+        )
         response.raise_for_status()
         
         json_response = response.json()
         
         # Verificar la estructura de la respuesta
-        if not json_response.get('data') or not json_response['data'].get('url'):
-            logger.error(f"Respuesta inesperada de tmpfiles.org: {json_response}")
+        if not json_response.get('success') or not json_response.get('files') or len(json_response['files']) == 0:
+            logger.error(f"Respuesta inesperada de qu.ax: {json_response}")
             raise Exception("La estructura de la respuesta no es la esperada")
         
-        # Obtener la URL base y transformarla a URL de descarga directa
-        base_url = json_response['data']['url']
-        download_url = base_url.replace("https://tmpfiles.org/", "https://tmpfiles.org/dl/")
+        # Obtener la URL de descarga
+        download_url = json_response['files'][0]['url']
         
-        logger.info(f"Subida exitosa a tmpfiles.org. URL: {download_url}")
+        logger.info(f"Subida exitosa a qu.ax. URL: {download_url}")
         return {
             'download_url': download_url,
-            'delete_url': json_response['data'].get('delete_url', '')
+            'delete_url': ''  # qu.ax no parece proporcionar URL de eliminación
         }
     except Exception as e:
-        logger.error(f"Error subiendo a tmpfiles.org: {str(e)}")
+        logger.error(f"Error subiendo a qu.ax: {str(e)}")
         raise
 
 def create_zip_file(folder_path):
@@ -246,13 +287,18 @@ def download_album():
         zip_data = create_zip_file(folder_path)
 
         # 4. Subir a tmpfiles.org
-        logger.info("Subiendo a tmpfiles.org...")
-        upload_response = upload_to_tmpfiles(zip_data, zip_file_name)
+        # logger.info("Subiendo a tmpfiles.org...")
+        # upload_response = upload_to_tmpfiles(zip_data, zip_file_name)
+
+        logger.info("Subiendo a qu.ax...")
+        upload_response = upload_to_quax(zip_data, zip_file_name)
         
+
         # 5. Limpiar
         cleanup_folder(folder_path)
 
         # 6. Respuesta exitosa
+        
         logger.info("Proceso completado exitosamente")
         return jsonify({
             "status": "success",
