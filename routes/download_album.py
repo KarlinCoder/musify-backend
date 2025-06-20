@@ -1,6 +1,8 @@
 # routes/download_album.py
 
 import os
+import shutil
+import tempfile
 import requests
 import zipfile
 from io import BytesIO
@@ -122,10 +124,13 @@ def upload_to_tmpfiles(zip_data, filename):
 
 def create_zip_file(folder_path):
     try:
-        memory_zip = BytesIO()
+        # Crear un directorio temporal dentro de DOWNLOAD_DIR
+        temp_dir = tempfile.mkdtemp(dir=DOWNLOAD_DIR)
+        zip_file_path = os.path.join(temp_dir, "album.zip")
+        
         file_count = 0
         
-        with zipfile.ZipFile(memory_zip, 'w', zipfile.ZIP_DEFLATED) as zipf:
+        with zipfile.ZipFile(zip_file_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
             for root, _, files in os.walk(folder_path):
                 for file in files:
                     file_path = os.path.join(root, file)
@@ -137,10 +142,15 @@ def create_zip_file(folder_path):
         if file_count == 0:
             raise Exception("No se encontraron archivos para comprimir")
         
-        memory_zip.seek(0)
-        zip_data = memory_zip.getvalue()
+        # Leer contenido del ZIP para devolverlo como bytes
+        with open(zip_file_path, 'rb') as f:
+            zip_data = f.read()
         
         logger.info(f"ZIP creado con {file_count} archivos ({len(zip_data)} bytes)")
+        
+        # Limpiar el directorio temporal
+        shutil.rmtree(temp_dir)
+
         return zip_data
     except Exception as e:
         logger.error(f"Error creando ZIP: {str(e)}")
