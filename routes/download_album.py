@@ -1,31 +1,31 @@
-# download_album.py
-
-from flask import Blueprint, request, jsonify
 import os
-import requests
-from mutagen.id3 import ID3, APIC, TIT2, TPE1, TALB, TRCK, TDRC
-from mutagen.easyid3 import EasyID3
-from io import BytesIO
 import shutil
-import zipfile
-import logging
 import tempfile
+import requests
+import zipfile
+from io import BytesIO
+from flask import Blueprint, jsonify, request
+from deezspot.deezloader import DeeLogin
+from mutagen.id3 import ID3, TIT2, TPE1, TALB, TRCK, TYER, APIC
+from mutagen.easyid3 import EasyID3
+import logging
 
-# Configuración
-DEEZER_API_ALBUM = "https://api.deezer.com/album/" 
-TMPFILES_API = "https://tmpfiles.org/api/v1/upload" 
-DOWNLOAD_DIR = tempfile.gettempdir()  # O puedes usar otra carpeta temporal
-
-# Logger básico
+# Configura logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-download_album_bp = Blueprint('download-album', __name__)
+DOWNLOAD_DIR = './downloads'
+os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
+DEEZER_API_ALBUM = "https://api.deezer.com/album/"
+TMPFILES_API = "https://tmpfiles.org/api/v1/upload"
+
+deezer = DeeLogin(arl='87f304e8bff197c8877dac3ca0a21d0ef6505af952ee392f856c30527508e177c9d0f90af069e248fee50cbe9b200e3962537f4eff8c8ef2d7d564b30c74e06d6c8779c3c0ed002e92792d403ab7522c5c8102ca4dadb319a02e4c8c5729e739')
+
+download_album_bp = Blueprint('download-album', __name__)
 
 def sanitize_filename(name):
     return "".join(c for c in name if c.isalnum() or c in (" ", "-", "_")).strip()
-
 
 def get_album_metadata(album_id):
     logger.info(f"Obteniendo metadatos del álbum {album_id}")
@@ -35,31 +35,32 @@ def get_album_metadata(album_id):
         raise Exception("Error al obtener metadatos del álbum")
     return response.json()
 
-
-def add_metadata_to_mp3(file_path, track, album_data, track_number=None):
+def add_metadata_to_mp3(file_path, track, album_data, track_number):
     try:
         try:
             audio = EasyID3(file_path)
-        except Exception:
+        except:
             audio = EasyID3()
+            audio.save(file_path)
+            audio = EasyID3(file_path)
 
         # Manejar artistas
         contributors = track.get("contributors", [])
-        artists = [artist["name"] for artist in contributors] if contributors else [
-            track.get("artist", {}).get("name", "Unknown")]
+        artists = [artist["name"] for artist in contributors] if contributors else [track.get("artist", {}).get("name", "Unknown")]
         artist_str = ", ".join(artists)
 
-        # Usar índice del bucle si está disponible
-        number = str(track_number) if track_number else str(track.get("track_position", 1))
+        # Usamos el track_number pasado como parámetro (basado en el índice del bucle)
+        track_num_str = str(track_number)
 
         # Añadir metadatos básicos
         audio["title"] = track.get("title", "Unknown Title")
         audio["artist"] = artist_str
         audio["album"] = album_data.get("title", "Unknown Album")
-        audio["tracknumber"] = number
+        audio["tracknumber"] = track_num_str
         audio["date"] = album_data.get("release_date", "").split("-")[0]
+
         audio.save(file_path)
-        logger.info(f"Metadatos básicos añadidos a {file_path}")
+        logger.info(f"Metadatos añadidos a {file_path} - Track: {track_num_str}")
 
         # Añadir portada del álbum
         try:
@@ -85,70 +86,87 @@ def add_metadata_to_mp3(file_path, track, album_data, track_number=None):
         logger.error(f"Error en add_metadata_to_mp3: {str(e)}")
         raise
 
+def upload_to_tmpfiles(zip_data, filename):
+    try:
+        logger.info(f"Subiendo {filename} ({len(zip_data)} bytes) a tmpfiles.org")
+        
+        if len(zip_data) == 0:
+            raise Exception("El archivo ZIP está vacío")
+        
+        # Crear un objeto BytesIO para el archivo en memoria
+        file_obj = BytesIO(zip_data)
+        files = {'file': (filename, file_obj, 'application/zip')}
+        
+        response = requests.post(TMPFILES_API, files=files)
+        response.raise_for_status()
+        
+        json_response = response.json()
+        
+        # Verificar la estructura de la respuesta
+        if not json_response.get('data') or not json_response['data'].get('url'):
+            logger.error(f"Respuesta inesperada de tmpfiles.org: {json_response}")
+            raise Exception("La estructura de la respuesta no es la esperada")
+        
+        # Obtener la URL base y transformarla a URL de descarga directa
+        base_url = json_response['data']['url']
+        download_url = base_url.replace("https://tmpfiles.org/", "https://tmpfiles.org/dl/")
+        
+        logger.info(f"Subida exitosa a tmpfiles.org. URL: {download_url}")
+        return {
+            'download_url': download_url,
+            'delete_url': json_response['data'].get('delete_url', '')
+        }
+    except Exception as e:
+        logger.error(f"Error subiendo a tmpfiles.org: {str(e)}")
+        raise
 
 def create_zip_file(folder_path):
-    temp_dir = tempfile.mkdtemp()
-    zip_file_name = os.path.basename(folder_path) + ".zip"
-    zip_file_path = os.path.join(temp_dir, zip_file_name)
-
-    file_count = 0
-    with zipfile.ZipFile(zip_file_path, 'w') as zipf:
-        for root, _, files in os.walk(folder_path):
-            for file in files:
-                if file.endswith(".mp3"):
+    try:
+        # Crear un directorio temporal dentro de DOWNLOAD_DIR
+        temp_dir = tempfile.mkdtemp(dir=DOWNLOAD_DIR)
+        zip_file_path = os.path.join(temp_dir, "album.zip")
+        
+        file_count = 0
+        
+        with zipfile.ZipFile(zip_file_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+            for root, _, files in os.walk(folder_path):
+                for file in files:
                     file_path = os.path.join(root, file)
                     arcname = os.path.relpath(file_path, folder_path)
                     zipf.write(file_path, arcname)
                     file_count += 1
                     logger.debug(f"Añadido al ZIP: {file_path}")
+        
+        if file_count == 0:
+            raise Exception("No se encontraron archivos para comprimir")
+        
+        # Leer contenido del ZIP para devolverlo como bytes
+        with open(zip_file_path, 'rb') as f:
+            zip_data = f.read()
+        
+        logger.info(f"ZIP creado con {file_count} archivos ({len(zip_data)} bytes)")
+        
+        # Limpiar el directorio temporal
+        shutil.rmtree(temp_dir)
 
-    if file_count == 0:
-        raise Exception("No se encontraron archivos para comprimir")
-
-    # Leer contenido del ZIP
-    with open(zip_file_path, 'rb') as f:
-        zip_data = f.read()
-    logger.info(f"ZIP creado con {file_count} archivos ({len(zip_data)} bytes)")
-
-    # Limpiar el directorio temporal
-    shutil.rmtree(temp_dir)
-    return zip_data
-
-
-def upload_to_tmpfiles(zip_data, filename):
-    logger.info(f"Subiendo {filename} ({len(zip_data)} bytes) a tmpfiles.org")
-    if len(zip_data) == 0:
-        raise Exception("El archivo ZIP está vacío")
-
-    file_obj = BytesIO(zip_data)
-    files = {'file': (filename, file_obj, 'application/zip')}
-    response = requests.post(TMPFILES_API, files=files)
-    response.raise_for_status()
-    json_response = response.json()
-
-    if not json_response.get('data') or not json_response['data'].get('url'):
-        logger.error(f"Respuesta inesperada de tmpfiles.org: {json_response}")
-        raise Exception("La estructura de la respuesta no es la esperada")
-
-    base_url = json_response['data']['url']
-    download_url = base_url.replace("https://tmpfiles.org/",  "https://tmpfiles.org/dl/")  + "/" + filename
-
-    return {
-        "download_url": download_url,
-        "delete_url": json_response.get("data", {}).get("delete_url")
-    }
-
+        return zip_data
+    except Exception as e:
+        logger.error(f"Error creando ZIP: {str(e)}")
+        raise
 
 def cleanup_folder(folder_path):
-    logger.info(f"Limpiando carpeta temporal: {folder_path}")
-    for root, dirs, files in os.walk(folder_path, topdown=False):
-        for name in files:
-            os.remove(os.path.join(root, name))
-        for name in dirs:
-            os.rmdir(os.path.join(root, name))
-    os.rmdir(folder_path)
-    logger.info("Limpieza completada")
-
+    try:
+        logger.info(f"Limpiando carpeta temporal: {folder_path}")
+        for root, dirs, files in os.walk(folder_path, topdown=False):
+            for name in files:
+                os.remove(os.path.join(root, name))
+            for name in dirs:
+                os.rmdir(os.path.join(root, name))
+        os.rmdir(folder_path)
+        logger.info("Limpieza completada")
+    except Exception as e:
+        logger.error(f"Error limpiando carpeta: {str(e)}")
+        raise
 
 @download_album_bp.route('/', methods=['GET'])
 def download_album():
@@ -187,56 +205,60 @@ def download_album():
 
         for idx, track in enumerate(tracks, start=1):
             song_id = track["id"]
-            song_title = track["title"]
+            track_url = f"https://www.deezer.com/track/{song_id}"
+            logger.info(f"[{idx}/{len(tracks)}] Procesando: {track.get('title')}")
 
-            # Descargar canción
-            download_link = track.get("preview")
-            if not download_link:
-                logger.warning(f"Pista {song_title} no tiene link de descarga")
-                continue
+            # Descargar pista
+            deezer.download_trackdee(
+                link_track=track_url,
+                output_dir=folder_path,
+                quality_download='MP3_128',
+                recursive_quality=True,
+                recursive_download=False
+            )
 
-            logger.info(f"Descargando pista {idx}: {song_title}")
-            response = requests.get(download_link)
-            if response.status_code != 200:
-                logger.warning(f"No se pudo descargar {song_title}")
-                continue
+            # Procesar archivo descargado
+            for root, _, files in os.walk(folder_path):
+                for file in files:
+                    if file.endswith(".mp3") and file not in downloaded_files:
+                        file_path = os.path.join(root, file)
 
-            # Guardar archivo temporal
-            file_path = os.path.join(folder_path, f"{song_id}.mp3")
-            with open(file_path, "wb") as f:
-                f.write(response.content)
+                        if os.path.getsize(file_path) == 0:
+                            logger.warning(f"Archivo vacío, eliminando: {file_path}")
+                            os.remove(file_path)
+                            continue
 
-            # Añadir metadatos
-            logger.info(f"Añadiendo metadatos a {file_path}")
-            add_metadata_to_mp3(file_path, track, album_data, idx)
+                        # Añadir metadatos - pasamos el índice como número de track
+                        logger.info(f"Añadiendo metadatos a {file_path}")
+                        add_metadata_to_mp3(file_path, track, album_data, idx)
 
-            # Renombrar archivo
-            new_file_name = f"{idx:02d}. {sanitize_filename(artist_name)} - {sanitize_filename(track['title'])}.mp3"
-            new_file_path = os.path.join(folder_path, new_file_name)
-            os.rename(file_path, new_file_path)
-            downloaded_files.append(new_file_name)
-
-        if not downloaded_files:
-            logger.error("No se descargó ninguna pista")
-            return jsonify({"error": "No se descargó ninguna pista del álbum"}), 400
+                        # Renombrar archivo
+                        new_file_name = f"{idx:02d}. {sanitize_filename(artist_name)} - {sanitize_filename(track['title'])}.mp3"
+                        new_file_path = os.path.join(folder_path, new_file_name)
+                        os.rename(file_path, new_file_path)
+                        downloaded_files.append(new_file_name)
+                        logger.info(f"Archivo renombrado a: {new_file_path}")
+                        break
 
         # 3. Crear ZIP
+        zip_file_name = f"{safe_artist} - {safe_album} ({release_year}).zip"
+        logger.info(f"Creando archivo ZIP: {zip_file_name}")
         zip_data = create_zip_file(folder_path)
 
         # 4. Subir a tmpfiles.org
         logger.info("Subiendo a tmpfiles.org...")
-        upload_response = upload_to_tmpfiles(zip_data, f"{folder_name}.zip")
-
+        upload_response = upload_to_tmpfiles(zip_data, zip_file_name)
+        
         # 5. Limpiar
         cleanup_folder(folder_path)
 
-        # 6. Devolver respuesta
+        # 6. Respuesta exitosa
         logger.info("Proceso completado exitosamente")
         return jsonify({
             "status": "success",
             "download_url": upload_response['download_url'],
             "delete_url": upload_response.get('delete_url', ''),
-            "filename": f"{folder_name}.zip",
+            "filename": zip_file_name,
             "album": album_title,
             "artist": artist_name,
             "year": release_year,
