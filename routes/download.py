@@ -1,4 +1,6 @@
 import os
+import shutil
+import tempfile
 import requests
 from io import BytesIO
 from flask import Blueprint, jsonify, request, send_file
@@ -73,13 +75,21 @@ def download_song():
     song_id = request.args.get('song_id')
 
     if not song_id or not song_id.isdigit():
-        return jsonify({"error": "Se requiere un 'song_id' válido (número)"}), 400
+        return jsonify({
+            "status": "error",
+            "message": "Se requiere un 'song_id' válido (número)",
+            "error": "Invalid song_id"
+        }), 400
 
     try:
         # Obtener datos de la canción desde Deezer
         response = requests.get(f"{DEEZER_API_SONG}{song_id}")
         if response.status_code != 200:
-            return jsonify({"error": "No se pudo obtener información de la canción"}), 404
+            return jsonify({
+                "status": "error",
+                "message": "No se pudo obtener información de la canción",
+                "error": "Track not found"
+            }), 404
 
         track_data = response.json()
         album_data = track_data.get("album", {})
@@ -88,18 +98,22 @@ def download_song():
         # Preparar nombres
         artist_name = artist_data.get("name", "Unknown Artist")
         title = track_data.get("title", "Unknown Title")
+        album_title = album_data.get("title", "Unknown Album")
+        release_year = album_data.get("release_date", "").split("-")[0] if album_data.get("release_date") else ""
 
         safe_artist = sanitize_filename(artist_name)
         safe_title = sanitize_filename(title)
+        safe_album = sanitize_filename(album_title)
 
-        output_dir = os.path.join(DOWNLOAD_DIR, f"{safe_artist} - {safe_title}")
-        os.makedirs(output_dir, exist_ok=True)
+        # Crear directorio temporal único
+        temp_dir = tempfile.mkdtemp(dir=DOWNLOAD_DIR)
+        output_file = os.path.join(temp_dir, f"{safe_artist} - {safe_title}.mp3")
 
         # Descargar canción
         track_url = f"https://www.deezer.com/track/{song_id}" 
         deezer.download_trackdee(
             link_track=track_url,
-            output_dir=output_dir,
+            output_dir=temp_dir,
             quality_download='MP3_128',
             recursive_quality=True,
             recursive_download=False
@@ -107,7 +121,7 @@ def download_song():
 
         # Buscar archivo descargado
         downloaded_file = None
-        for root, _, files in os.walk(output_dir):
+        for root, _, files in os.walk(temp_dir):
             for file in files:
                 if file.endswith(".mp3"):
                     downloaded_file = os.path.join(root, file)
@@ -116,37 +130,47 @@ def download_song():
                 break
 
         if not downloaded_file or os.path.getsize(downloaded_file) == 0:
-            return jsonify({"error": "No se pudo descargar la canción o está vacía"}), 500
+            shutil.rmtree(temp_dir)
+            return jsonify({
+                "status": "error",
+                "message": "No se pudo descargar la canción o está vacía",
+                "error": "Download failed"
+            }), 500
 
         # Añadir metadatos
         add_metadata_to_mp3(downloaded_file, track_data, album_data)
 
         # Renombrar archivo final
-        new_file_name = f"{safe_artist} - {safe_title}.mp3"
-        new_file_path = os.path.join(output_dir, new_file_name)
-        os.rename(downloaded_file, new_file_path)
+        os.rename(downloaded_file, output_file)
 
-        # Cargar archivo en memoria
-        mp3_buffer = BytesIO()
-        with open(new_file_path, "rb") as f:
-            mp3_buffer.write(f.read())
-        mp3_buffer.seek(0)
+        # Generar URL de descarga (esto depende de cómo esté configurado tu servidor)
+        # En Flask puedes servir archivos estáticos desde una ruta específica
+        # Aquí asumo que tienes una ruta configurada para servir archivos desde DOWNLOAD_DIR
+        download_url = f"/downloads/{os.path.basename(temp_dir)}/{os.path.basename(output_file)}"
 
-        # Limpiar carpeta temporal
-        for root, dirs, files in os.walk(output_dir, topdown=False):
-            for name in files:
-                os.remove(os.path.join(root, name))
-            for name in dirs:
-                os.rmdir(os.path.join(root, name))
-        os.rmdir(output_dir)
+        # Configurar headers para descarga directa
+        response_headers = {
+            "Content-Disposition": f"attachment; filename=\"{os.path.basename(output_file)}\"",
+            "Content-Type": "audio/mpeg"
+        }
 
-        # Enviar archivo como descarga directa
-        return send_file(
-            mp3_buffer,
-            mimetype='audio/mpeg',
-            as_attachment=True,
-            download_name=new_file_name
-        )
+        # Limpiar el archivo temporal después de un tiempo (podrías usar un task scheduler)
+        # O implementar un endpoint para limpieza manual
+
+        return jsonify({
+            "status": "success",
+            "album": album_title,
+            "artist": artist_name,
+            "delete_url": "",  # Implementar si necesitas borrado manual
+            "download_url": download_url,
+            "filename": os.path.basename(output_file),
+            "message": "Canción descargada con éxito",
+            "year": release_year
+        }), 200, response_headers
 
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({
+            "status": "error",
+            "message": "Ocurrió un error al procesar la canción",
+            "error": str(e)
+        }), 500
