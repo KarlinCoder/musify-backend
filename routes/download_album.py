@@ -86,40 +86,6 @@ def add_metadata_to_mp3(file_path, track, album_data, track_number):
         logger.error(f"Error en add_metadata_to_mp3: {str(e)}")
         raise
 
-# def upload_to_tmpfiles(zip_data, filename):
-#     try:
-#         logger.info(f"Subiendo {filename} ({len(zip_data)} bytes) a tmpfiles.org")
-        
-#         if len(zip_data) == 0:
-#             raise Exception("El archivo ZIP está vacío")
-        
-#         # Crear un objeto BytesIO para el archivo en memoria
-#         file_obj = BytesIO(zip_data)
-#         files = {'file': (filename, file_obj, 'application/zip')}
-        
-#         response = requests.post(TMPFILES_API, files=files)
-#         response.raise_for_status()
-        
-#         json_response = response.json()
-        
-#         # Verificar la estructura de la respuesta
-#         if not json_response.get('data') or not json_response['data'].get('url'):
-#             logger.error(f"Respuesta inesperada de tmpfiles.org: {json_response}")
-#             raise Exception("La estructura de la respuesta no es la esperada")
-        
-#         # Obtener la URL base y transformarla a URL de descarga directa
-#         base_url = json_response['data']['url']
-#         download_url = base_url.replace("https://tmpfiles.org/", "https://tmpfiles.org/dl/")
-        
-#         logger.info(f"Subida exitosa a tmpfiles.org. URL: {download_url}")
-#         return {
-#             'download_url': download_url,
-#             'delete_url': json_response['data'].get('delete_url', '')
-#         }
-#     except Exception as e:
-#         logger.error(f"Error subiendo a tmpfiles.org: {str(e)}")
-#         raise
-
 def upload_to_quax(zip_data, filename):
     try:
         logger.info(f"Subiendo {filename} ({len(zip_data)} bytes) a qu.ax")
@@ -163,33 +129,27 @@ def upload_to_quax(zip_data, filename):
 
 def create_zip_file(folder_path):
     try:
-        # Crear un directorio temporal dentro de DOWNLOAD_DIR
-        temp_dir = tempfile.mkdtemp(dir=DOWNLOAD_DIR)
-        zip_file_path = os.path.join(temp_dir, "album.zip")
+        # Crear un archivo ZIP en memoria
+        zip_buffer = BytesIO()
         
         file_count = 0
         
-        with zipfile.ZipFile(zip_file_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zipf:
             for root, _, files in os.walk(folder_path):
                 for file in files:
                     file_path = os.path.join(root, file)
-                    arcname = os.path.relpath(file_path, folder_path)
+                    # Mantener la estructura de directorios dentro del ZIP
+                    arcname = os.path.join(os.path.basename(folder_path), os.path.relpath(file_path, folder_path))
                     zipf.write(file_path, arcname)
                     file_count += 1
-                    logger.debug(f"Añadido al ZIP: {file_path}")
+                    logger.debug(f"Añadido al ZIP: {file_path} como {arcname}")
         
         if file_count == 0:
             raise Exception("No se encontraron archivos para comprimir")
         
-        # Leer contenido del ZIP para devolverlo como bytes
-        with open(zip_file_path, 'rb') as f:
-            zip_data = f.read()
-        
+        zip_data = zip_buffer.getvalue()
         logger.info(f"ZIP creado con {file_count} archivos ({len(zip_data)} bytes)")
         
-        # Limpiar el directorio temporal
-        shutil.rmtree(temp_dir)
-
         return zip_data
     except Exception as e:
         logger.error(f"Error creando ZIP: {str(e)}")
@@ -198,12 +158,7 @@ def create_zip_file(folder_path):
 def cleanup_folder(folder_path):
     try:
         logger.info(f"Limpiando carpeta temporal: {folder_path}")
-        for root, dirs, files in os.walk(folder_path, topdown=False):
-            for name in files:
-                os.remove(os.path.join(root, name))
-            for name in dirs:
-                os.rmdir(os.path.join(root, name))
-        os.rmdir(folder_path)
+        shutil.rmtree(folder_path)
         logger.info("Limpieza completada")
     except Exception as e:
         logger.error(f"Error limpiando carpeta: {str(e)}")
@@ -274,31 +229,26 @@ def download_album():
                         add_metadata_to_mp3(file_path, track, album_data, idx)
 
                         # Renombrar archivo
-                        new_file_name = f"{idx:02d}. {sanitize_filename(artist_name)} - {sanitize_filename(track['title'])}.mp3"
+                        new_file_name = f"{idx:02d}. {sanitize_filename(track['title'])}.mp3"
                         new_file_path = os.path.join(folder_path, new_file_name)
                         os.rename(file_path, new_file_path)
                         downloaded_files.append(new_file_name)
                         logger.info(f"Archivo renombrado a: {new_file_path}")
                         break
 
-        # 3. Crear ZIP
-        zip_file_name = f"{safe_artist} - {safe_album} ({release_year}).zip"
+        # 3. Crear ZIP con la carpeta completa
+        zip_file_name = f"{folder_name}.zip"
         logger.info(f"Creando archivo ZIP: {zip_file_name}")
         zip_data = create_zip_file(folder_path)
 
-        # 4. Subir a tmpfiles.org
-        # logger.info("Subiendo a tmpfiles.org...")
-        # upload_response = upload_to_tmpfiles(zip_data, zip_file_name)
-
+        # 4. Subir a qu.ax
         logger.info("Subiendo a qu.ax...")
         upload_response = upload_to_quax(zip_data, zip_file_name)
-        
 
         # 5. Limpiar
         cleanup_folder(folder_path)
 
         # 6. Respuesta exitosa
-        
         logger.info("Proceso completado exitosamente")
         return jsonify({
             "status": "success",
