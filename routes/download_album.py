@@ -9,6 +9,7 @@ from deezspot.deezloader import DeeLogin
 from mutagen.id3 import ID3, TIT2, TPE1, TALB, TRCK, TYER, APIC
 from mutagen.easyid3 import EasyID3
 import logging
+import re
 
 # Configura logging
 logging.basicConfig(level=logging.INFO)
@@ -24,8 +25,16 @@ deezer = DeeLogin(arl='87f304e8bff197c8877dac3ca0a21d0ef6505af952ee392f856c30527
 
 download_album_bp = Blueprint('download-album', __name__)
 
+def capitalize_words(text):
+    """Capitaliza cada palabra en el texto, preservando acentos"""
+    return ' '.join(word.capitalize() for word in text.split())
+
 def sanitize_filename(name):
-    return "".join(c for c in name if c.isalnum() or c in (" ", "-", "_")).strip()
+    """Limpia y formatea el nombre para usar en archivos"""
+    # Primero capitalizamos las palabras correctamente
+    name = capitalize_words(name)
+    # Luego eliminamos caracteres no permitidos
+    return "".join(c for c in name if c.isalnum() or c in (" ", "-", "_", "(", ")")).strip()
 
 def get_album_metadata(album_id):
     logger.info(f"Obteniendo metadatos del álbum {album_id}")
@@ -240,9 +249,15 @@ def download_album():
                         logger.info(f"Archivo renombrado a: {new_file_path}")
                         break
 
-        # 3. Crear ZIP
-        zip_file_name = f"{safe_artist} - {safe_album} ({release_year}).zip"
+        # 3. Crear nombre del archivo ZIP con formato profesional
+        formatted_artist = capitalize_words(artist_name)
+        formatted_album = capitalize_words(album_title)
+        zip_file_name = f"{formatted_artist} - {formatted_album} ({release_year}).zip"
+        
+        # Asegurarse de que el nombre del ZIP esté sanitizado
+        zip_file_name = sanitize_filename(zip_file_name)
         logger.info(f"Creando archivo ZIP: {zip_file_name}")
+        
         zip_data = create_zip_file(folder_path)
 
         # 4. Subir a tmpfiles.org
