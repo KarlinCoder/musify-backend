@@ -96,7 +96,7 @@ def download_song():
         os.makedirs(output_dir, exist_ok=True)
 
         # Descargar canción
-        track_url = f"https://www.deezer.com/track/{song_id}" 
+        track_url = f"https://www.deezer.com/track/{song_id}"    
         deezer.download_trackdee(
             link_track=track_url,
             output_dir=output_dir,
@@ -126,27 +126,13 @@ def download_song():
         new_file_path = os.path.join(output_dir, new_file_name)
         os.rename(downloaded_file, new_file_path)
 
-        # Cargar archivo en memoria
-        mp3_buffer = BytesIO()
-        with open(new_file_path, "rb") as f:
-            mp3_buffer.write(f.read())
-        mp3_buffer.seek(0)
+        # Crear una ruta relativa o URL pública (esto depende de cómo sirvas los archivos)
+        file_url = f"/downloads/{safe_artist} - {safe_title}/{new_file_name}"
 
-        # Limpiar carpeta temporal
-        for root, dirs, files in os.walk(output_dir, topdown=False):
-            for name in files:
-                os.remove(os.path.join(root, name))
-            for name in dirs:
-                os.rmdir(os.path.join(root, name))
-        os.rmdir(output_dir)
-
-        # Enviar archivo como descarga directa
-        return send_file(
-            mp3_buffer,
-            mimetype='audio/mpeg',
-            as_attachment=True,
-            download_name=new_file_name
-        )
+        # Devolver solo el JSON con la URL del archivo
+        return jsonify({
+            "file_url": file_url
+        }), 200
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
