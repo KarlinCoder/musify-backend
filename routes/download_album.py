@@ -27,6 +27,14 @@ deezer = DeeLogin(arl='81eef20bf87ecee4263e5c2679ad9b3be1c086637408897cc87b70e23
 
 download_album_bp = Blueprint('download-album', __name__)
 
+# Variable global para el progreso
+download_progress = {
+    'status': 'waiting',
+    'message': '',
+    'completed': 0,
+    'total': 0
+}
+
 def sanitize_filename(name):
     return "".join(c for c in name if c.isalnum() or c in (" ", "-", "_")).strip()
 
@@ -167,8 +175,65 @@ def cleanup_folder(folder_path):
         logger.error(f"Error limpiando carpeta: {str(e)}")
         raise
 
+def download_track(track, idx, folder_path, album_data):
+    """Función para descargar y procesar una pista en un hilo separado"""
+    global download_progress
+    
+    try:
+        song_id = track["id"]
+        track_url = f"https://www.deezer.com/track/{song_id}"
+        logger.info(f"[{idx}] Iniciando descarga: {track.get('title')}")
+        
+        # Actualizar progreso
+        download_progress['message'] = f"Descargando {idx}/{download_progress['total']}: {track.get('title')}"
+        
+        # Descargar pista
+        deezer.download_trackdee(
+            link_track=track_url,
+            output_dir=folder_path,
+            quality_download='MP3_128',
+            recursive_quality=True,
+            recursive_download=False
+        )
+        
+        # Procesar archivo descargado
+        for root, _, files in os.walk(folder_path):
+            for file in files:
+                if file.endswith(".mp3"):
+                    file_path = os.path.join(root, file)
+                    
+                    if os.path.getsize(file_path) == 0:
+                        logger.warning(f"Archivo vacío, eliminando: {file_path}")
+                        os.remove(file_path)
+                        continue
+                    
+                    # Añadir metadatos
+                    logger.info(f"Añadiendo metadatos a {file_path}")
+                    add_metadata_to_mp3(file_path, track, album_data, idx)
+                    
+                    # Renombrar archivo
+                    new_file_name = f"{idx:02d}. {sanitize_filename(track['title'])}.mp3"
+                    new_file_path = os.path.join(folder_path, new_file_name)
+                    os.rename(file_path, new_file_path)
+                    logger.info(f"Archivo renombrado a: {new_file_path}")
+                    
+                    # Actualizar progreso
+                    download_progress['completed'] += 1
+                    download_progress['message'] = f"Procesado {download_progress['completed']}/{download_progress['total']}: {track.get('title')}"
+                    break
+    except Exception as e:
+        logger.error(f"Error en track {idx}: {str(e)}")
+        download_progress['message'] = f"Error en track {idx}: {str(e)}"
+
+@download_album_bp.route('/progress')
+def progress():
+    """Endpoint para verificar el progreso"""
+    return jsonify(download_progress)
+
 @download_album_bp.route('/', methods=['GET'])
 def download_album():
+    global download_progress
+    
     album_id = request.args.get('album_id')
     logger.info(f"Iniciando descarga para album_id: {album_id}")
 
@@ -176,97 +241,93 @@ def download_album():
         logger.error("ID de álbum inválido")
         return jsonify({"error": "Se requiere un ID de álbum válido (número)"}), 400
 
-    try:
-        # 1. Obtener metadatos del álbum
-        album_data = get_album_metadata(album_id)
-        logger.info(f"Álbum: {album_data.get('title')} - Artista: {album_data.get('artist', {}).get('name')}")
+    # Respuesta inmediata para que el navegador no se quede esperando
+    response = jsonify({
+        "status": "processing",
+        "message": "Descargando album completo en proceso con multihilos...",
+        "progress_url": "/progress"
+    })
+    
+    # Iniciar el proceso en segundo plano
+    def background_task():
+        global download_progress
+        
+        try:
+            # 1. Obtener metadatos del álbum
+            download_progress = {
+                'status': 'downloading',
+                'message': 'Obteniendo metadatos del álbum...',
+                'completed': 0,
+                'total': 0
+            }
+            
+            album_data = get_album_metadata(album_id)
+            logger.info(f"Álbum: {album_data.get('title')} - Artista: {album_data.get('artist', {}).get('name')}")
 
-        artist_name = album_data["artist"]["name"]
-        album_title = album_data["title"]
-        release_year = album_data["release_date"].split("-")[0]
+            artist_name = album_data["artist"]["name"]
+            album_title = album_data["title"]
+            release_year = album_data["release_date"].split("-")[0]
 
-        # Crear nombre de carpeta seguro
-        safe_artist = sanitize_filename(artist_name)
-        safe_album = sanitize_filename(album_title)
-        folder_name = f"{safe_artist} - {safe_album} ({release_year})"
-        folder_path = os.path.join(DOWNLOAD_DIR, folder_name)
-        os.makedirs(folder_path, exist_ok=True)
-        logger.info(f"Carpeta de descarga: {folder_path}")
+            # Crear nombre de carpeta seguro
+            safe_artist = sanitize_filename(artist_name)
+            safe_album = sanitize_filename(album_title)
+            folder_name = f"{safe_artist} - {safe_album} ({release_year})"
+            folder_path = os.path.join(DOWNLOAD_DIR, folder_name)
+            os.makedirs(folder_path, exist_ok=True)
+            logger.info(f"Carpeta de descarga: {folder_path}")
 
-        # 2. Descargar pistas
-        tracks = album_data.get("tracks", {}).get("data", [])
-        if not tracks:
-            logger.error("Álbum no tiene pistas disponibles")
-            return jsonify({"error": "Este álbum no tiene pistas disponibles"}), 400
+            # 2. Descargar pistas en paralelo
+            tracks = album_data.get("tracks", {}).get("data", [])
+            if not tracks:
+                download_progress['status'] = 'error'
+                download_progress['message'] = 'Álbum no tiene pistas disponibles'
+                logger.error("Álbum no tiene pistas disponibles")
+                return
 
-        logger.info(f"Descargando {len(tracks)} pistas...")
-        downloaded_files = []
+            download_progress['total'] = len(tracks)
+            download_progress['message'] = f"Iniciando descarga de {len(tracks)} pistas..."
+            logger.info(f"Descargando {len(tracks)} pistas en paralelo...")
 
-        for idx, track in enumerate(tracks, start=1):
-            song_id = track["id"]
-            track_url = f"https://www.deezer.com/track/{song_id}"
-            logger.info(f"[{idx}/{len(tracks)}] Procesando: {track.get('title')}")
+            threads = []
+            for idx, track in enumerate(tracks, start=1):
+                thread = threading.Thread(
+                    target=download_track,
+                    args=(track, idx, folder_path, album_data)
+                )
+                thread.start()
+                threads.append(thread)
+                time.sleep(0.1)  # Pequeña pausa para evitar saturación
 
-            # Descargar pista
-            deezer.download_trackdee(
-                link_track=track_url,
-                output_dir=folder_path,
-                quality_download='MP3_128',
-                recursive_quality=True,
-                recursive_download=False
-            )
+            # Esperar a que todos los hilos terminen
+            for thread in threads:
+                thread.join()
 
-            # Procesar archivo descargado
-            for root, _, files in os.walk(folder_path):
-                for file in files:
-                    if file.endswith(".mp3") and file not in downloaded_files:
-                        file_path = os.path.join(root, file)
+            # 3. Crear ZIP con la carpeta completa
+            download_progress['message'] = "Creando archivo ZIP..."
+            zip_file_name = f"{folder_name}.zip"
+            logger.info(f"Creando archivo ZIP: {zip_file_name}")
+            zip_data = create_zip_file(folder_path)
 
-                        if os.path.getsize(file_path) == 0:
-                            logger.warning(f"Archivo vacío, eliminando: {file_path}")
-                            os.remove(file_path)
-                            continue
+            # 4. Subir a qu.ax
+            download_progress['message'] = "Subiendo a qu.ax..."
+            logger.info("Subiendo a qu.ax...")
+            upload_response = upload_to_quax(zip_data, zip_file_name)
 
-                        # Añadir metadatos - pasamos el índice como número de track
-                        logger.info(f"Añadiendo metadatos a {file_path}")
-                        add_metadata_to_mp3(file_path, track, album_data, idx)
+            # 5. Limpiar
+            cleanup_folder(folder_path)
 
-                        # Renombrar archivo
-                        new_file_name = f"{idx:02d}. {sanitize_filename(track['title'])}.mp3"
-                        new_file_path = os.path.join(folder_path, new_file_name)
-                        os.rename(file_path, new_file_path)
-                        downloaded_files.append(new_file_name)
-                        logger.info(f"Archivo renombrado a: {new_file_path}")
-                        break
+            # 6. Actualizar estado final
+            download_progress['status'] = 'completed'
+            download_progress['message'] = 'Proceso completado exitosamente'
+            download_progress['download_url'] = upload_response['download_url']
+            logger.info("Proceso completado exitosamente")
 
-        # 3. Crear ZIP con la carpeta completa
-        zip_file_name = f"{folder_name}.zip"
-        logger.info(f"Creando archivo ZIP: {zip_file_name}")
-        zip_data = create_zip_file(folder_path)
+        except Exception as e:
+            logger.error(f"Error procesando álbum: {str(e)}", exc_info=True)
+            download_progress['status'] = 'error'
+            download_progress['message'] = f"Error: {str(e)}"
 
-        # 4. Subir a qu.ax
-        logger.info("Subiendo a qu.ax...")
-        upload_response = upload_to_quax(zip_data, zip_file_name)
-
-        # 5. Limpiar
-        cleanup_folder(folder_path)
-
-        # 6. Respuesta exitosa
-        logger.info("Proceso completado exitosamente")
-        return jsonify({
-            "status": "success",
-            "download_url": upload_response['download_url'],
-            "delete_url": upload_response.get('delete_url', ''),
-            "filename": zip_file_name,
-            "album": album_title,
-            "artist": artist_name,
-            "year": release_year,
-            "message": "Álbum descargado y comprimido con éxito"
-        })
-
-    except Exception as e:
-        logger.error(f"Error procesando álbum: {str(e)}", exc_info=True)
-        return jsonify({
-            "error": str(e),
-            "message": "Ocurrió un error al procesar el álbum"
-        }), 500
+    # Iniciar el hilo de fondo
+    threading.Thread(target=background_task).start()
+    
+    return response
