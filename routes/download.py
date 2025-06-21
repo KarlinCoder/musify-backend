@@ -71,40 +71,45 @@ def download_song():
         safe_artist = sanitize_filename(artist_name)
         safe_title = sanitize_filename(title)
         file_name = f"{safe_artist} - {safe_title}.mp3"
-        relative_path = os.path.join(safe_artist, file_name)
-        full_path = os.path.join(DOWNLOAD_DIR, relative_path)
+        full_path = os.path.join(DOWNLOAD_DIR, file_name)
 
-        # Crear directorio si no existe
-        os.makedirs(os.path.dirname(full_path), exist_ok=True)
+        # Limpiar archivo existente si hay
+        if os.path.exists(full_path):
+            os.remove(full_path)
 
-        # Descargar canción
+        # Descargar canción directamente al archivo final
         track_url = f"https://www.deezer.com/track/{song_id}"
+        print(f"Descargando canción {song_id} a {full_path}")  # Log para diagnóstico
+        
         deezer.download_trackdee(
             link_track=track_url,
-            output_dir=os.path.dirname(full_path),
+            output_dir=DOWNLOAD_DIR,
             quality_download='MP3_128',
             recursive_quality=True,
-            recursive_download=False
+            recursive_download=False,
+            method_save=file_name  # Forzar el nombre del archivo
         )
 
-        # Buscar archivo descargado (puede tener nombre temporal)
-        downloaded_file = None
-        for file in os.listdir(os.path.dirname(full_path)):
-            if file.endswith('.mp3'):
-                downloaded_file = os.path.join(os.path.dirname(full_path), file)
-                break
+        # Verificar si el archivo se descargó correctamente
+        if not os.path.exists(full_path):
+            # Listar archivos en la carpeta para diagnóstico
+            existing_files = os.listdir(DOWNLOAD_DIR)
+            print(f"Archivos en la carpeta: {existing_files}")  # Log para diagnóstico
+            return jsonify({
+                "error": "No se encontró el archivo descargado",
+                "details": {
+                    "expected_file": file_name,
+                    "existing_files": existing_files
+                }
+            }), 500
 
-        if not downloaded_file:
-            return jsonify({"error": "No se encontró el archivo descargado"}), 500
-
-        # Renombrar y añadir metadatos
-        os.rename(downloaded_file, full_path)
+        # Añadir metadatos
         add_metadata_to_mp3(full_path, track_data, track_data.get("album", {}))
-
+        
         # Devolver URL para descargar
         return jsonify({
             "status": "success",
-            "download_url": f"/downloads/{relative_path}",
+            "download_url": f"/downloads/{file_name}",
             "filename": file_name,
             "artist": artist_name,
             "title": title,
@@ -113,4 +118,6 @@ def download_song():
         })
 
     except Exception as e:
+        import traceback
+        print(f"Error: {str(e)}\n{traceback.format_exc()}")  # Log detallado del error
         return jsonify({"error": str(e)}), 500
