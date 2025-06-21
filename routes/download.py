@@ -1,26 +1,27 @@
 import os
 import requests
-from flask import Blueprint, jsonify, request, send_from_directory
+from io import BytesIO
+from flask import Blueprint, jsonify, request, send_file
 from deezspot.deezloader import DeeLogin
 from mutagen.id3 import ID3, TIT2, TPE1, TALB, TRCK, TYER, APIC
 from mutagen.easyid3 import EasyID3
 
-# Configuración
-DOWNLOAD_DIR = os.path.join(os.getcwd(), 'downloads')
+# Directorio temporal para descargas
+DOWNLOAD_DIR = './downloads'
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
-DEEZER_API_SONG = "https://api.deezer.com/track/"
+# API base de Deezer
+DEEZER_API_SONG = "https://api.deezer.com/track/" 
+
+# Inicialización del cliente Deezer
 deezer = DeeLogin(arl='87f304e8bff197c8877dac3ca0a21d0ef6505af952ee392f856c30527508e177c9d0f90af069e248fee50cbe9b200e3962537f4eff8c8ef2d7d564b30c74e06d6c8779c3c0ed002e92792d403ab7522c5c8102ca4dadb319a02e4c8c5729e739')
 
 download_song_bp = Blueprint('download-song', __name__)
 
-# Ruta para servir archivos descargados
-@download_song_bp.route('/downloads/<path:filename>')
-def serve_download(filename):
-    return send_from_directory(DOWNLOAD_DIR, filename, as_attachment=True)
 
 def sanitize_filename(name):
     return "".join(c for c in name if c.isalnum() or c in (" ", "-", "_")).strip()
+
 
 def add_metadata_to_mp3(file_path, track_data, album_data):
     try:
@@ -28,29 +29,44 @@ def add_metadata_to_mp3(file_path, track_data, album_data):
     except:
         audio = EasyID3()
 
+    # Artistas
     contributors = track_data.get("contributors", [])
     artists = [artist["name"] for artist in contributors]
     if not artists:
         artists = [track_data["artist"]["name"]]
     artist_str = ", ".join(artists)
 
+    # Metadatos
     audio["title"] = track_data["title"]
     audio["artist"] = artist_str
     audio["album"] = album_data["title"]
     audio["tracknumber"] = str(track_data["track_position"])
     audio["date"] = album_data["release_date"].split("-")[0]
 
-    audio.save(file_path)
+    try:
+        audio.save(file_path)
+    except Exception as e:
+        print(f"Error saving metadata to file: {e}")
 
+    # Carátula
     id3 = ID3(file_path)
     cover_url = album_data.get("cover_xl") or album_data.get("cover_big")
     if cover_url:
         try:
             cover_data = requests.get(cover_url).content
-            id3.add(APIC(encoding=3, mime="image/jpeg", type=3, desc="Cover", data=cover_data))
+            id3.add(
+                APIC(
+                    encoding=3,
+                    mime="image/jpeg",
+                    type=3,
+                    desc="Cover",
+                    data=cover_data
+                )
+            )
             id3.save(v2_version=3)
         except Exception as e:
             print(f"Error adding cover art: {e}")
+
 
 @download_song_bp.route('/', methods=['GET'])
 def download_song():
@@ -60,64 +76,77 @@ def download_song():
         return jsonify({"error": "Se requiere un 'song_id' válido (número)"}), 400
 
     try:
-        # Obtener datos de la canción
+        # Obtener datos de la canción desde Deezer
         response = requests.get(f"{DEEZER_API_SONG}{song_id}")
         if response.status_code != 200:
             return jsonify({"error": "No se pudo obtener información de la canción"}), 404
 
         track_data = response.json()
-        artist_name = track_data.get("artist", {}).get("name", "Unknown Artist")
+        album_data = track_data.get("album", {})
+        artist_data = track_data.get("artist", {})
+
+        # Preparar nombres
+        artist_name = artist_data.get("name", "Unknown Artist")
         title = track_data.get("title", "Unknown Title")
+
         safe_artist = sanitize_filename(artist_name)
         safe_title = sanitize_filename(title)
-        file_name = f"{safe_artist} - {safe_title}.mp3"
-        full_path = os.path.join(DOWNLOAD_DIR, file_name)
 
-        # Limpiar archivo existente si hay
-        if os.path.exists(full_path):
-            os.remove(full_path)
+        output_dir = os.path.join(DOWNLOAD_DIR, f"{safe_artist} - {safe_title}")
+        os.makedirs(output_dir, exist_ok=True)
 
-        # Descargar canción directamente al archivo final
-        track_url = f"https://www.deezer.com/track/{song_id}"
-        print(f"Descargando canción {song_id} a {full_path}")  # Log para diagnóstico
-        
+        # Descargar canción
+        track_url = f"https://www.deezer.com/track/{song_id}" 
         deezer.download_trackdee(
             link_track=track_url,
-            output_dir=DOWNLOAD_DIR,
+            output_dir=output_dir,
             quality_download='MP3_128',
             recursive_quality=True,
-            recursive_download=False,
-            method_save=file_name  # Forzar el nombre del archivo
+            recursive_download=False
         )
 
-        # Verificar si el archivo se descargó correctamente
-        if not os.path.exists(full_path):
-            # Listar archivos en la carpeta para diagnóstico
-            existing_files = os.listdir(DOWNLOAD_DIR)
-            print(f"Archivos en la carpeta: {existing_files}")  # Log para diagnóstico
-            return jsonify({
-                "error": "No se encontró el archivo descargado",
-                "details": {
-                    "expected_file": file_name,
-                    "existing_files": existing_files
-                }
-            }), 500
+        # Buscar archivo descargado
+        downloaded_file = None
+        for root, _, files in os.walk(output_dir):
+            for file in files:
+                if file.endswith(".mp3"):
+                    downloaded_file = os.path.join(root, file)
+                    break
+            if downloaded_file:
+                break
+
+        if not downloaded_file or os.path.getsize(downloaded_file) == 0:
+            return jsonify({"error": "No se pudo descargar la canción o está vacía"}), 500
 
         # Añadir metadatos
-        add_metadata_to_mp3(full_path, track_data, track_data.get("album", {}))
-        
-        # Devolver URL para descargar
-        return jsonify({
-            "status": "success",
-            "download_url": f"/downloads/{file_name}",
-            "filename": file_name,
-            "artist": artist_name,
-            "title": title,
-            "duration": track_data.get("duration", 0),
-            "warning": "Este archivo es temporal y se eliminará cuando el servidor se reinicie"
-        })
+        add_metadata_to_mp3(downloaded_file, track_data, album_data)
+
+        # Renombrar archivo final
+        new_file_name = f"{safe_artist} - {safe_title}.mp3"
+        new_file_path = os.path.join(output_dir, new_file_name)
+        os.rename(downloaded_file, new_file_path)
+
+        # Cargar archivo en memoria
+        mp3_buffer = BytesIO()
+        with open(new_file_path, "rb") as f:
+            mp3_buffer.write(f.read())
+        mp3_buffer.seek(0)
+
+        # Limpiar carpeta temporal
+        for root, dirs, files in os.walk(output_dir, topdown=False):
+            for name in files:
+                os.remove(os.path.join(root, name))
+            for name in dirs:
+                os.rmdir(os.path.join(root, name))
+        os.rmdir(output_dir)
+
+        # Enviar archivo como descarga directa
+        return send_file(
+            mp3_buffer,
+            mimetype='audio/mpeg',
+            as_attachment=True,
+            download_name=new_file_name
+        )
 
     except Exception as e:
-        import traceback
-        print(f"Error: {str(e)}\n{traceback.format_exc()}")  # Log detallado del error
         return jsonify({"error": str(e)}), 500
