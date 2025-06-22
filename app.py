@@ -7,7 +7,7 @@ from functools import wraps
 from flask import request, jsonify
 
 app = Flask(__name__)
-CORS(app, origins=["https://musifydl.vercel.app"]) 
+# CORS(app, origins=["https://musifydl.vercel.app"]) 
 
 DOWNLOAD_DIR = './downloads'
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
