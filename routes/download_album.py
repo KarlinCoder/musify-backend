@@ -1,7 +1,6 @@
 import os
 import shutil
 import tempfile
-from flask_limiter import Limiter
 import requests
 import zipfile
 from io import BytesIO
@@ -10,8 +9,6 @@ from deezspot.deezloader import DeeLogin
 from mutagen.id3 import ID3, TIT2, TPE1, TALB, TRCK, TYER, APIC
 from mutagen.easyid3 import EasyID3
 import logging
-
-from app import require_api_key
 
 # Configura logging
 logging.basicConfig(level=logging.INFO)
@@ -23,10 +20,7 @@ os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 DEEZER_API_ALBUM = "https://api.deezer.com/album/"
 TMPFILES_API = "https://tmpfiles.org/api/v1/upload"
 
-#a5925e3ab97053f14670f20b485fcb51abc817a926d5cd3f93ad62caa21a8cb08914805b0447f3c9625e2a3743039b8d735fa1d1a6dd11f3d77d3172d6291f1f5e0961903b48399edcec0542f7ff422247649d5812b4a2ebc862b64e8132a806
-
-# Inicialización del cliente Deezer
-deezer = DeeLogin(arl='81eef20bf87ecee4263e5c2679ad9b3be1c086637408897cc87b70e2397d0ff1cadbfcd01f378b7b42a547681d196c39c0a82c2c6015935a3c6ce3d46bce9126f2ec6d0b80e4c0226617d445cb59987a3f1159bc69896b50cf10f4e2bf3d1537')
+deezer = DeeLogin(arl='87f304e8bff197c8877dac3ca0a21d0ef6505af952ee392f856c30527508e177c9d0f90af069e248fee50cbe9b200e3962537f4eff8c8ef2d7d564b30c74e06d6c8779c3c0ed002e92792d403ab7522c5c8102ca4dadb319a02e4c8c5729e739')
 
 download_album_bp = Blueprint('download-album', __name__)
 
@@ -170,9 +164,7 @@ def cleanup_folder(folder_path):
         logger.error(f"Error limpiando carpeta: {str(e)}")
         raise
 
-@download_album_bp.route('/')
-@require_api_key
-@Limiter.limit("20/minute")
+@download_album_bp.route('/', methods=['GET'])
 def download_album():
     album_id = request.args.get('album_id')
     logger.info(f"Iniciando descarga para album_id: {album_id}")
