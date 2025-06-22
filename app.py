@@ -20,7 +20,9 @@ def download_file(filename):
     file_path = os.path.join(DOWNLOAD_DIR, filename)
     if not os.path.isfile(file_path):
         return jsonify({"error": "Archivo no encontrado"}), 404
-    return send_file(file_path)
+    
+    # Forzar descarga con as_attachment=True
+    return send_file(file_path, as_attachment=True)
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)), debug=True)
