@@ -6,3 +6,4 @@ gunicorn>=20.1.0
 yt-dlp>=2024.7.5
 requests>=2.32.0
 deezspot>=0.1.2
+Flask-Limiter==3.12
