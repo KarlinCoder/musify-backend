@@ -6,7 +6,6 @@ from deezspot.deezloader import DeeLogin
 from mutagen.id3 import ID3, TIT2, TPE1, TALB, TRCK, TYER, APIC
 from mutagen.easyid3 import EasyID3
 
-from app import require_api_key
 
 # Directorio temporal para descargas
 DOWNLOAD_DIR = './downloads'
