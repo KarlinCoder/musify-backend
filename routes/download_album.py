@@ -1,6 +1,7 @@
 import os
 import shutil
 import tempfile
+from flask_limiter import Limiter
 import requests
 import zipfile
 from io import BytesIO
@@ -9,6 +10,8 @@ from deezspot.deezloader import DeeLogin
 from mutagen.id3 import ID3, TIT2, TPE1, TALB, TRCK, TYER, APIC
 from mutagen.easyid3 import EasyID3
 import logging
+
+from app import require_api_key
 
 # Configura logging
 logging.basicConfig(level=logging.INFO)
@@ -167,7 +170,9 @@ def cleanup_folder(folder_path):
         logger.error(f"Error limpiando carpeta: {str(e)}")
         raise
 
-@download_album_bp.route('/', methods=['GET'])
+@download_album_bp.route('/')
+@require_api_key
+@Limiter.limit("20/minute")
 def download_album():
     album_id = request.args.get('album_id')
     logger.info(f"Iniciando descarga para album_id: {album_id}")
