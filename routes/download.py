@@ -70,6 +70,8 @@ def add_metadata_to_mp3(file_path, track_data, album_data):
         except Exception as e:
             print(f"Error adding cover art: {e}")
 
+
+@download_song_bp.route('/', methods=['GET'])
 def download_song():
     song_id = request.args.get('song_id')
 
