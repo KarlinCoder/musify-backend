@@ -24,5 +24,10 @@ def download_file(filename):
     # Forzar descarga con as_attachment=True
     return send_file(file_path, as_attachment=True)
 
+@app.route('/check')
+def check():
+    return jsonify({"status": "ok"}), 200
+
+
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)), debug=True)
