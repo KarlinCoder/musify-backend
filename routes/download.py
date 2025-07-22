@@ -1,6 +1,7 @@
 import os
 import requests
 from io import BytesIO
+from arl import arl_token
 from flask import Blueprint, jsonify, request, send_file
 from deezspot.deezloader import DeeLogin
 from mutagen.id3 import ID3, TIT2, TPE1, TALB, TRCK, TYER, APIC
@@ -17,7 +18,7 @@ DEEZER_API_SONG = "https://api.deezer.com/track/"
 #a5925e3ab97053f14670f20b485fcb51abc817a926d5cd3f93ad62caa21a8cb08914805b0447f3c9625e2a3743039b8d735fa1d1a6dd11f3d77d3172d6291f1f5e0961903b48399edcec0542f7ff422247649d5812b4a2ebc862b64e8132a806
 
 # Inicialización del cliente Deezer
-deezer = DeeLogin(arl='068d42006dae77623264854e85b5ac94a89fd38cb6a36bf420ad46036da9a27b379237ba23fcda67fd6a7d7c4adcba75f9a2b17c7ad82182c49d3ca00aaffeceaa5998499c7a3448924dab15b55c2b69f594aa6e7c07415cb928df58d6e3ae41')
+deezer = DeeLogin(arl=arl_token)
 
 download_song_bp = Blueprint('download-song', __name__)
 

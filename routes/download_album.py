@@ -3,6 +3,7 @@ import shutil
 import tempfile
 import requests
 import zipfile
+from arl import arl_token
 from io import BytesIO
 from flask import Blueprint, jsonify, request
 from deezspot.deezloader import DeeLogin
@@ -20,7 +21,7 @@ os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 DEEZER_API_ALBUM = "https://api.deezer.com/album/"
 TMPFILES_API = "https://tmpfiles.org/api/v1/upload"
 
-deezer = DeeLogin(arl='068d42006dae77623264854e85b5ac94a89fd38cb6a36bf420ad46036da9a27b379237ba23fcda67fd6a7d7c4adcba75f9a2b17c7ad82182c49d3ca00aaffeceaa5998499c7a3448924dab15b55c2b69f594aa6e7c07415cb928df58d6e3ae41')
+deezer = DeeLogin(arl=arl_token)
 
 download_album_bp = Blueprint('download-album', __name__)
 
