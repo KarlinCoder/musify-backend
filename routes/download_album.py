@@ -20,7 +20,7 @@ os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 DEEZER_API_ALBUM = "https://api.deezer.com/album/"
 TMPFILES_API = "https://tmpfiles.org/api/v1/upload"
 
-deezer = DeeLogin(arl='a5925e3ab97053f14670f20b485fcb51abc817a926d5cd3f93ad62caa21a8cb08914805b0447f3c9625e2a3743039b8d735fa1d1a6dd11f3d77d3172d6291f1f5e0961903b48399edcec0542f7ff422247649d5812b4a2ebc862b64e8132a806')
+deezer = DeeLogin(arl='def6e87375202d1e92bf4c6a88042f53e542f408e5cdb775f75a48664bb21e20e2386ec10c4ac1054dd9c2bb3ae8cd59c370a7be3baac7932f4eb9177e10bdcd1dbb3552eaf238f06ae538deaa5703686c148fbba60c16f805e6529e07541')
 
 download_album_bp = Blueprint('download-album', __name__)
 
